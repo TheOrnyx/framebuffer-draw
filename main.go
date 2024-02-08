@@ -2,12 +2,14 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"image"
+	"image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 	"log"
 	"os"
+	"path"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -34,13 +36,38 @@ func main() {
 	if err != nil {
 		log.Fatal("failed to mmap", err)
 	}
-	
-	img, err := openImage(filePath)
+
+	file, err := os.Open(filePath)
 	if err != nil {
-		log.Fatal("Failed to open image:", err)
+		log.Fatalf("Unable to open image file: %v", err)
+	}
+
+	switch path.Ext(filePath) {
+	case ".png", ".jpg", ".jpeg":
+		img, _, err := image.Decode(file)
+		if err != nil {
+			log.Fatalf("Unable to decode image: %v", err)
+		}
+
+		drawPNG(img, &mem)
+
+	case ".gif":
+		img, err := gif.DecodeAll(file)
+		if err != nil {
+			log.Fatalf("Unable to decode image: %v", err)
+		}
+
+		drawGif(*img, &mem)
 	}
 	
+	err = unix.Munmap(mem)
+	if err != nil {
+		log.Fatal("Failed to unmap mem,", err)
+	}
+}
 
+// drawPNG draw a png to the framebuffer
+func drawPNG(img image.Image, mem *[]byte)  {
 	for y := 0; y < *h; y++ {
 		if y > img.Bounds().Dy() {
 			continue
@@ -51,29 +78,35 @@ func main() {
 			}
 			
 			r, g, b, _ := img.At(x, y).RGBA()
-			mem[y * *w * 4 + x * 4 + 0] = byte(b)
-			mem[y * *w * 4 + x * 4 + 1] = byte(g)
-			mem[y * *w * 4 + x * 4 + 2] = byte(r)
+			(*mem)[y * *w * 4 + x * 4 + 0] = byte(b)
+			(*mem)[y * *w * 4 + x * 4 + 1] = byte(g)
+			(*mem)[y * *w * 4 + x * 4 + 2] = byte(r)
 		}
-	}
-
-	err = unix.Munmap(mem)
-	if err != nil {
-		log.Fatal("Failed to unmap mem,", err)
 	}
 }
 
-// openImage open, decode and return and image based on the path
-func openImage(path string) (image.Image, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("Unable to open image file: %v", err)
+// drawGif draw every frame of a gif image
+func drawGif(gifImg gif.GIF, mem *[]byte)  {
+	for  {
+		for i := range gifImg.Image {
+			img := gifImg.Image[i]
+			for y := 0; y < *h; y++ {
+				if y > img.Bounds().Dy() {
+					continue
+				}
+				for x := 0; x < *w; x++ {
+					if x > img.Bounds().Dx() {
+						continue
+					}
+					
+					r, g, b, _ := img.At(x, y).RGBA()
+					(*mem)[y * *w * 4 + x * 4 + 0] = byte(b)
+					(*mem)[y * *w * 4 + x * 4 + 1] = byte(g)
+					(*mem)[y * *w * 4 + x * 4 + 2] = byte(r)
+				}
+			}
+			time.Sleep((time.Millisecond * 10) * time.Duration(gifImg.Delay[i]))
+			// time.Sleep(time.Millisecond * 250)
+		}
 	}
-
-	img, _, err := image.Decode(file)
-	if err != nil {
-		return nil, fmt.Errorf("Unable to decode image: %v", err)
-	}
-
-	return img, nil
 }
