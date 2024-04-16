@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"image"
 	"image/gif"
 	_ "image/jpeg"
@@ -17,30 +18,47 @@ import (
 var (
 	w *int
 	h *int
+	x *int
+	y *int
 	filePath string
+	transThreshold uint32 = 0xF0F0 // the threshold for drawing transparent pixels (needs tweaking)
 )
 
-
-func main() {
-	w = flag.Int("width", 1920, "the max width to draw")
-	h = flag.Int("height", 1080, "The max height to draw")
-	flag.Parse()
-	filePath = flag.Args()[0]
-
+// initVars initialize the variables and return them
+func initVars(imgPath string) (*[]byte, *os.File, error) {
 	fd, err := os.OpenFile("/dev/fb0", os.O_RDWR, 0644)
 	if err != nil {
-		log.Fatal("Failed to open framebuffer", err)
+		return nil, nil, fmt.Errorf("Failed to open framebuffer: %v", err)
 	}
+	defer fd.Close()
 
 	mem, err := unix.Mmap(int(fd.Fd()), 0, *w * *h * 4, unix.PROT_WRITE, unix.MAP_SHARED)
 	if err != nil {
-		log.Fatal("failed to mmap", err)
+		return nil, nil, fmt.Errorf("failed to mmap: %v", err)
 	}
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		log.Fatalf("Unable to open image file: %v", err)
+		return nil, nil, fmt.Errorf("Unable to open image file: %v", err)
 	}
+
+	return &mem, file, nil
+}
+
+func main() {
+	w = flag.Int("width", 1920, "the width of your framebuffer")
+	h = flag.Int("height", 1080, "The height of your framebuffer")
+	x = flag.Int("x", 0, "The start x position to draw at")
+	y = flag.Int("y", 0, "The start y position to draw at")
+	
+	flag.Parse()
+	filePath = flag.Args()[0] // TODO - make this like print out smth if there's no args
+
+	mem, file, err := initVars(filePath)
+	if err != nil {
+		log.Fatalf("Failed to initialize program: %v", err)
+	}
+	defer file.Close()
 
 	switch path.Ext(filePath) {
 	case ".png", ".jpg", ".jpeg":
@@ -49,7 +67,7 @@ func main() {
 			log.Fatalf("Unable to decode image: %v", err)
 		}
 
-		drawPNG(img, &mem)
+		drawPNG(img, mem)
 
 	case ".gif":
 		img, err := gif.DecodeAll(file)
@@ -57,10 +75,10 @@ func main() {
 			log.Fatalf("Unable to decode image: %v", err)
 		}
 
-		drawGif(*img, &mem)
+		drawGif(*img, mem)
 	}
 	
-	err = unix.Munmap(mem)
+	err = unix.Munmap(*mem)
 	if err != nil {
 		log.Fatal("Failed to unmap mem,", err)
 	}
@@ -68,19 +86,30 @@ func main() {
 
 // drawPNG draw a png to the framebuffer
 func drawPNG(img image.Image, mem *[]byte)  {
-	for y := 0; y < *h; y++ {
-		if y > img.Bounds().Dy() {
-			continue
+	drawImageAtPoint(img, mem, *x, *y)
+}
+
+// drawImageAtPoint draw the given image at a specific point
+// x and y determine the top right position to draw from
+func drawImageAtPoint(img image.Image, mem *[]byte, x, y int)  {
+	for row := 0; row < img.Bounds().Dy(); row++ {
+		if y + row >= *h {
+			return
 		}
-		for x := 0; x < *w; x++ {
-			if x > img.Bounds().Dx() {
+		
+		for col := 0; col < img.Bounds().Dx(); col++ {
+			if x + col >= *w {
+				break
+			}
+			
+			r, g, b, a := img.At(col, row).RGBA()
+			if a <= transThreshold {
 				continue
 			}
 			
-			r, g, b, _ := img.At(x, y).RGBA()
-			(*mem)[y * *w * 4 + x * 4 + 0] = byte(b)
-			(*mem)[y * *w * 4 + x * 4 + 1] = byte(g)
-			(*mem)[y * *w * 4 + x * 4 + 2] = byte(r)
+			(*mem)[(row + y) * *w * 4 + (col + x) * 4 + 0] = byte(b)
+			(*mem)[(row + y) * *w * 4 + (col + x) * 4 + 1] = byte(g)
+			(*mem)[(row + y) * *w * 4 + (col + x) * 4 + 2] = byte(r)
 		}
 	}
 }
@@ -89,24 +118,9 @@ func drawPNG(img image.Image, mem *[]byte)  {
 func drawGif(gifImg gif.GIF, mem *[]byte)  {
 	for  {
 		for i := range gifImg.Image {
-			img := gifImg.Image[i]
-			for y := 0; y < *h; y++ {
-				if y > img.Bounds().Dy() {
-					continue
-				}
-				for x := 0; x < *w; x++ {
-					if x > img.Bounds().Dx() {
-						continue
-					}
-					
-					r, g, b, _ := img.At(x, y).RGBA()
-					(*mem)[y * *w * 4 + x * 4 + 0] = byte(b)
-					(*mem)[y * *w * 4 + x * 4 + 1] = byte(g)
-					(*mem)[y * *w * 4 + x * 4 + 2] = byte(r)
-				}
-			}
+			drawImageAtPoint(gifImg.Image[i], mem, 0, 0)
+			fmt.Printf("")
 			time.Sleep((time.Millisecond * 10) * time.Duration(gifImg.Delay[i]))
-			// time.Sleep(time.Millisecond * 250)
 		}
 	}
 }
