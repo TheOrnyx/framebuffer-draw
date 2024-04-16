@@ -20,8 +20,10 @@ var (
 	h *int
 	x *int
 	y *int
+	runType *string // the type to run
 	filePath string
 	transThreshold uint32 = 0xF0F0 // the threshold for drawing transparent pixels (needs tweaking)
+	runFunc func(img image.Image, mem *[]byte, startx, starty int) = drawImageAtPoint
 )
 
 // initVars initialize the variables and return them
@@ -45,14 +47,28 @@ func initVars(imgPath string) (*[]byte, *os.File, error) {
 	return &mem, file, nil
 }
 
+// chooseRunFunc choose and assign the run function based on the flag
+func chooseRunFunc()  {
+	switch *runType {
+	case "draw": // normal draw
+
+	case "bounce": // bounce
+		runFunc = runBounce
+	default:
+		log.Println("Unkown run function type, continuing with default draw")
+	}
+}
+
 func main() {
 	w = flag.Int("width", 1920, "the width of your framebuffer")
 	h = flag.Int("height", 1080, "The height of your framebuffer")
 	x = flag.Int("x", 0, "The start x position to draw at")
 	y = flag.Int("y", 0, "The start y position to draw at")
+	runType = flag.String("run", "draw", "the run type to draw\nOptions: draw, bounce")
 	
 	flag.Parse()
-	filePath = flag.Args()[0] // TODO - make this like print out smth if there's no args
+	filePath = flag.Args()[0] // TODO - make this like print out smth if there's no arg
+	chooseRunFunc()
 
 	mem, file, err := initVars(filePath)
 	if err != nil {
@@ -66,8 +82,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("Unable to decode image: %v", err)
 		}
-
-		drawPNG(img, mem)
+		runFunc(img, mem, *x, *y)
 
 	case ".gif":
 		img, err := gif.DecodeAll(file)
@@ -84,14 +99,9 @@ func main() {
 	}
 }
 
-// drawPNG draw a png to the framebuffer
-func drawPNG(img image.Image, mem *[]byte)  {
-	drawImageAtPoint(img, mem, *x, *y)
-}
-
 // drawImageAtPoint draw the given image at a specific point
 // x and y determine the top right position to draw from
-func drawImageAtPoint(img image.Image, mem *[]byte, x, y int)  {
+func drawImageAtPoint(img image.Image, mem *[]byte, x, y int)  {	
 	for row := 0; row < img.Bounds().Dy(); row++ {
 		if y + row >= *h {
 			return
@@ -106,12 +116,14 @@ func drawImageAtPoint(img image.Image, mem *[]byte, x, y int)  {
 			if a <= transThreshold {
 				continue
 			}
-			
-			(*mem)[(row + y) * *w * 4 + (col + x) * 4 + 0] = byte(b)
-			(*mem)[(row + y) * *w * 4 + (col + x) * 4 + 1] = byte(g)
-			(*mem)[(row + y) * *w * 4 + (col + x) * 4 + 2] = byte(r)
+
+			bluePix := (row + y) * *w * 4 + (col + x) * 4
+			(*mem)[bluePix] = byte(b)
+			(*mem)[bluePix + 1] = byte(g)
+			(*mem)[bluePix + 2] = byte(r)
 		}
 	}
+	fmt.Printf("") // doing a regular print like makes it like refresh faster for some reason?
 }
 
 // drawGif draw every frame of a gif image
@@ -119,8 +131,16 @@ func drawGif(gifImg gif.GIF, mem *[]byte)  {
 	for  {
 		for i := range gifImg.Image {
 			drawImageAtPoint(gifImg.Image[i], mem, 0, 0)
-			fmt.Printf("")
 			time.Sleep((time.Millisecond * 10) * time.Duration(gifImg.Delay[i]))
 		}
+	}
+}
+
+// clearPrevPoints clear the previously drawn points
+func clearPrevPoints(mem *[]byte, deletePoints map[int]struct{})  {
+	for i := range deletePoints {
+		(*mem)[i] = 0
+		(*mem)[i+1] = 0
+		(*mem)[i+2] = 0
 	}
 }
