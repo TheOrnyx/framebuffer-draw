@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"image"
+	"image/draw"
 	"image/gif"
 	_ "image/jpeg"
 	_ "image/png"
@@ -16,14 +17,15 @@ import (
 )
 
 var (
-	w *int
-	h *int
-	x *int
-	y *int
-	runType *string // the type to run
-	filePath string
-	transThreshold uint32 = 0xF0F0 // the threshold for drawing transparent pixels (needs tweaking)
-	runFunc func(img image.Image, mem *[]byte, startx, starty int) = drawImageAtPoint
+	w              *int
+	h              *int
+	x              *int
+	y              *int
+	runType        *string // the type to run
+	filePath       string
+	transThreshold uint8                                                  = 0xF0 // the threshold for drawing transparent pixels (needs tweaking)
+	runFunc        func(img image.Image, mem *[]byte, startx, starty int) = drawImageAtPoint
+	origMem        []byte
 )
 
 // initVars initialize the variables and return them
@@ -34,7 +36,7 @@ func initVars(imgPath string) (*[]byte, *os.File, error) {
 	}
 	defer fd.Close()
 
-	mem, err := unix.Mmap(int(fd.Fd()), 0, *w * *h * 4, unix.PROT_WRITE, unix.MAP_SHARED)
+	mem, err := unix.Mmap(int(fd.Fd()), 0, *w**h*4, unix.PROT_WRITE, unix.MAP_SHARED)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to mmap: %v", err)
 	}
@@ -48,7 +50,7 @@ func initVars(imgPath string) (*[]byte, *os.File, error) {
 }
 
 // chooseRunFunc choose and assign the run function based on the flag
-func chooseRunFunc()  {
+func chooseRunFunc() {
 	switch *runType {
 	case "draw": // normal draw
 
@@ -65,7 +67,7 @@ func main() {
 	x = flag.Int("x", 0, "The start x position to draw at")
 	y = flag.Int("y", 0, "The start y position to draw at")
 	runType = flag.String("run", "draw", "the run type to draw\nOptions: draw, bounce")
-	
+
 	flag.Parse()
 	filePath = flag.Args()[0] // TODO - make this like print out smth if there's no arg
 	chooseRunFunc()
@@ -75,6 +77,8 @@ func main() {
 		log.Fatalf("Failed to initialize program: %v", err)
 	}
 	defer file.Close()
+	origMem = make([]byte, len(*mem))
+	copy(origMem, *mem)
 
 	switch path.Ext(filePath) {
 	case ".png", ".jpg", ".jpeg":
@@ -92,7 +96,7 @@ func main() {
 
 		drawGif(*img, mem)
 	}
-	
+
 	err = unix.Munmap(*mem)
 	if err != nil {
 		log.Fatal("Failed to unmap mem,", err)
@@ -101,46 +105,50 @@ func main() {
 
 // drawImageAtPoint draw the given image at a specific point
 // x and y determine the top right position to draw from
-func drawImageAtPoint(img image.Image, mem *[]byte, x, y int)  {	
-	for row := 0; row < img.Bounds().Dy(); row++ {
-		if y + row >= *h {
+func drawImageAtPoint(img image.Image, mem *[]byte, x, y int) {
+	newMem := make([]byte, len(origMem))
+	copy(newMem, origMem)
+	bounds := img.Bounds()
+	width, height := bounds.Max.X, bounds.Max.Y
+	rgba := image.NewRGBA(bounds)
+	draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
+	for row := 0; row < width; row++ {
+		if y+row >= *h {
 			return
 		}
-		
-		for col := 0; col < img.Bounds().Dx(); col++ {
-			if x + col >= *w {
+		for col := 0; col < height; col++ {
+			if x+col >= *w {
 				break
 			}
-			
-			r, g, b, a := img.At(col, row).RGBA()
-			if a <= transThreshold {
+
+			index := (row*width + col) * 4
+			pix := rgba.Pix[index : index+4]
+			if pix[3] <= transThreshold {
 				continue
 			}
 
-			bluePix := (row + y) * *w * 4 + (col + x) * 4
-			(*mem)[bluePix] = byte(b)
-			(*mem)[bluePix + 1] = byte(g)
-			(*mem)[bluePix + 2] = byte(r)
+			memIndex := (row+y)**w*4 + (col+x)*4
+			if newMem[memIndex] != newMem[len(newMem)-4] {
+				continue
+			}
+
+			newMem[memIndex] = pix[2]
+			newMem[memIndex+1] = pix[1]
+			newMem[memIndex+2] = pix[0]
 		}
 	}
+	copy(*mem, newMem)
+	// copy(unsafe.Slice((*byte)(unsafe.Pointer(&(*mem)[0])), len(newMem)), newMem)
+	// unix.Msync(*mem, unix.MS_SYNC)
 	fmt.Printf("") // doing a regular print like makes it like refresh faster for some reason?
 }
 
 // drawGif draw every frame of a gif image
-func drawGif(gifImg gif.GIF, mem *[]byte)  {
-	for  {
+func drawGif(gifImg gif.GIF, mem *[]byte) {
+	for {
 		for i := range gifImg.Image {
 			drawImageAtPoint(gifImg.Image[i], mem, 0, 0)
 			time.Sleep((time.Millisecond * 10) * time.Duration(gifImg.Delay[i]))
 		}
-	}
-}
-
-// clearPrevPoints clear the previously drawn points
-func clearPrevPoints(mem *[]byte, deletePoints map[int]struct{})  {
-	for i := range deletePoints {
-		(*mem)[i] = 0
-		(*mem)[i+1] = 0
-		(*mem)[i+2] = 0
 	}
 }
