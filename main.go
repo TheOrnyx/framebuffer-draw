@@ -22,10 +22,12 @@ var (
 	x              *int
 	y              *int
 	runType        *string // the type to run
+	drawOver bool // whether the image should draw over the text
 	filePath       string
 	transThreshold uint8                                                  = 0xF0 // the threshold for drawing transparent pixels (needs tweaking)
 	runFunc        func(img image.Image, mem *[]byte, startx, starty int) = drawImageAtPoint
 	origMem        []byte
+	imgRGBA *image.RGBA
 )
 
 // initVars initialize the variables and return them
@@ -70,6 +72,8 @@ func main() {
 	x = flag.Int("x", 0, "The start x position to draw at")
 	y = flag.Int("y", 0, "The start y position to draw at")
 	runType = flag.String("run", "draw", "the run type to draw\nOptions: draw, bounce")
+	flag.BoolFunc("drawtop", "is present if the image should be drawn on top of text",
+		func(s string) error {drawOver = true; return nil})
 
 	flag.Parse()
 	filePath = flag.Args()[0] // TODO - make this like print out smth if there's no arg
@@ -111,8 +115,11 @@ func drawImageAtPoint(img image.Image, mem *[]byte, x, y int) {
 	copy(newMem, origMem)
 	bounds := img.Bounds()
 	width, height := bounds.Max.X, bounds.Max.Y
-	rgba := image.NewRGBA(bounds)
-	draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
+
+	if imgRGBA == nil {
+		makeImgRGBA(img)
+	}
+	
 	for row := 0; row < width; row++ {
 		if y+row >= *h {
 			return
@@ -123,13 +130,13 @@ func drawImageAtPoint(img image.Image, mem *[]byte, x, y int) {
 			}
 
 			index := (row*width + col) * 4
-			pix := rgba.Pix[index : index+4]
+			pix := imgRGBA.Pix[index : index+4]
 			if pix[3] <= transThreshold {
 				continue
 			}
 
 			memIndex := (row+y)**w*4 + (col+x)*4
-			if newMem[memIndex] != newMem[len(newMem)-4] {
+			if !drawOver && newMem[memIndex] != newMem[len(newMem)-4] {
 				continue
 			}
 
@@ -144,10 +151,19 @@ func drawImageAtPoint(img image.Image, mem *[]byte, x, y int) {
 	fmt.Printf("") // doing a regular print like makes it like refresh faster for some reason?
 }
 
+// makeImgRGBA make an image rgba and assign the global object to it
+func makeImgRGBA(img image.Image)  {
+	bounds := img.Bounds()
+	rgba := image.NewRGBA(bounds)
+	draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
+	imgRGBA = rgba
+}
+
 // drawGif draw every frame of a gif image
 func drawGif(gifImg gif.GIF, mem *[]byte) {
 	for {
 		for i := range gifImg.Image {
+			makeImgRGBA(gifImg.Image[i])
 			drawImageAtPoint(gifImg.Image[i], mem, 0, 0)
 			time.Sleep((time.Millisecond * 10) * time.Duration(gifImg.Delay[i]))
 		}
