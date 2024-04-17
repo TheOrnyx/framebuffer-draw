@@ -46,6 +46,9 @@ func initVars(imgPath string) (*[]byte, *os.File, error) {
 		return nil, nil, fmt.Errorf("Unable to open image file: %v", err)
 	}
 
+	origMem = make([]byte, len(mem))
+	copy(origMem, mem)
+
 	return &mem, file, nil
 }
 
@@ -77,8 +80,6 @@ func main() {
 		log.Fatalf("Failed to initialize program: %v", err)
 	}
 	defer file.Close()
-	origMem = make([]byte, len(*mem))
-	copy(origMem, *mem)
 
 	switch path.Ext(filePath) {
 	case ".png", ".jpg", ".jpeg":
