@@ -120,11 +120,11 @@ func drawImageAtPoint(img image.Image, mem *[]byte, x, y int) {
 		makeImgRGBA(img)
 	}
 	
-	for row := 0; row < width; row++ {
+	for row := 0; row < height; row++ {
 		if y+row >= *h {
-			return
+			continue
 		}
-		for col := 0; col < height; col++ {
+		for col := 0; col < width; col++ {
 			if x+col >= *w {
 				break
 			}
@@ -135,7 +135,7 @@ func drawImageAtPoint(img image.Image, mem *[]byte, x, y int) {
 				continue
 			}
 
-			memIndex := (row+y)**w*4 + (col+x)*4
+			memIndex := (row+y)*(*w)*4 + (col+x)*4
 			if !drawOver && newMem[memIndex] != newMem[len(newMem)-4] {
 				continue
 			}
